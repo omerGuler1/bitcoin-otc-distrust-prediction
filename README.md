@@ -16,5 +16,4 @@ python -m scripts.run_stage1_eda
 Produces `data/interim/edges_clean.parquet`, ~63 monthly snapshot pickles under
 `data/interim/snapshots/`, and EDA figures under `results/figures/`.
 
-See [the approved plan](../../.claude/plans/indexed-noodling-stonebraker.md)
-for the full stage-by-stage roadmap.
+
