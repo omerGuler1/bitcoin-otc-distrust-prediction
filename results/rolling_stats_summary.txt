@@ -1,0 +1,63 @@
+Stage 13 - Paired statistical tests on rolling-origin per-fold deltas
+  source     : rolling_eval_paired_deltas.csv   (n_folds = 25)
+  primary    : Holm-Bonferroni, alpha = 0.05  (n_tests = 4)
+  secondary  : Benjamini-Hochberg FDR, q = 0.05  (n_tests = 20)
+  tests      : two-sided paired Wilcoxon (zero_method='wilcox')
+               plus two-sided exact binomial sign test
+  effect size: matched-pairs rank-biserial r_rb in [-1, +1]
+
+==============================================================================
+PRIMARY FAMILY (Holm-Bonferroni)
+==============================================================================
+  logreg | roc_auc  | (S+T) - S          | median=+0.0361  mean=+0.0410  +/-/0=21/4/0
+            Wilcoxon p=0.0001399   sign p=0.0009105   r_rb=+0.809   [REJECT_H0]
+  rf     | roc_auc  | (S+T) - S          | median=+0.0309  mean=+0.0435  +/-/0=22/3/0
+            Wilcoxon p=4.542e-05   sign p=0.0001565   r_rb=+0.852   [REJECT_H0]
+  rf     | pr_auc   | (S+T) - S          | median=+0.0022  mean=+0.0080  +/-/0=21/4/0
+            Wilcoxon p=0.0006313   sign p=0.0009105   r_rb=+0.742   [REJECT_H0]
+  rf     | pr_auc   | (S+T+C) - (S+T)    | median=+0.0005  mean=+0.0030  +/-/0=19/6/0
+            Wilcoxon p=0.04826   sign p=0.01463   r_rb=+0.452   [REJECT_H0]
+
+==============================================================================
+SECONDARY FAMILY (Benjamini-Hochberg)
+==============================================================================
+  logreg | roc_auc  | (S+T+C) - (S+T)    | median=-0.0004  mean=-0.0017  +/-/0=12/13/0
+            Wilcoxon p=0.4742   sign p=1   r_rb=-0.169   [ns]
+  logreg | roc_auc  | (S+T+C) - S        | median=+0.0329  mean=+0.0392  +/-/0=23/2/0
+            Wilcoxon p=0.0001623   sign p=1.943e-05   r_rb=+0.803   [REJECT_H0]
+  logreg | pr_auc   | (S+T) - S          | median=+0.0010  mean=+0.0016  +/-/0=21/4/0
+            Wilcoxon p=0.003419   sign p=0.0009105   r_rb=+0.649   [REJECT_H0]
+  logreg | pr_auc   | (S+T+C) - (S+T)    | median=+0.0000  mean=+0.0002  +/-/0=14/11/0
+            Wilcoxon p=0.3525   sign p=0.69   r_rb=+0.218   [ns]
+  logreg | pr_auc   | (S+T+C) - S        | median=+0.0011  mean=+0.0018  +/-/0=21/4/0
+            Wilcoxon p=0.002025   sign p=0.0009105   r_rb=+0.680   [REJECT_H0]
+  logreg | p@50     | (S+T) - S          | median=+0.0000  mean=+0.0016  +/-/0=2/1/22
+            Wilcoxon p=nan   sign p=1   r_rb=+nan   [ns]  [Wilcoxon unreliable: too many zeros]
+  logreg | p@50     | (S+T+C) - (S+T)    | median=+0.0000  mean=+0.0000  +/-/0=0/0/25
+            Wilcoxon p=nan   sign p=nan   r_rb=+nan   [ns]  [Wilcoxon unreliable: too many zeros]
+  logreg | p@50     | (S+T+C) - S        | median=+0.0000  mean=+0.0016  +/-/0=2/1/22
+            Wilcoxon p=nan   sign p=1   r_rb=+nan   [ns]  [Wilcoxon unreliable: too many zeros]
+  logreg | p@100    | (S+T) - S          | median=+0.0000  mean=+0.0028  +/-/0=7/2/16
+            Wilcoxon p=0.1678   sign p=0.1797   r_rb=+0.511   [ns]
+  logreg | p@100    | (S+T+C) - (S+T)    | median=+0.0000  mean=-0.0008  +/-/0=1/3/21
+            Wilcoxon p=nan   sign p=0.625   r_rb=+nan   [ns]  [Wilcoxon unreliable: too many zeros]
+  logreg | p@100    | (S+T+C) - S        | median=+0.0000  mean=+0.0020  +/-/0=6/2/17
+            Wilcoxon p=0.2501   sign p=0.2891   r_rb=+0.444   [ns]
+  rf     | roc_auc  | (S+T+C) - (S+T)    | median=-0.0037  mean=-0.0042  +/-/0=10/15/0
+            Wilcoxon p=0.09573   sign p=0.4244   r_rb=-0.385   [ns]
+  rf     | roc_auc  | (S+T+C) - S        | median=+0.0289  mean=+0.0393  +/-/0=22/3/0
+            Wilcoxon p=0.0001879   sign p=0.0001565   r_rb=+0.797   [REJECT_H0]
+  rf     | pr_auc   | (S+T+C) - S        | median=+0.0025  mean=+0.0110  +/-/0=22/3/0
+            Wilcoxon p=0.0003291   sign p=0.0001565   r_rb=+0.772   [REJECT_H0]
+  rf     | p@50     | (S+T) - S          | median=+0.0000  mean=+0.0136  +/-/0=11/3/11
+            Wilcoxon p=0.03085   sign p=0.05737   r_rb=+0.648   [ns]
+  rf     | p@50     | (S+T+C) - (S+T)    | median=+0.0000  mean=+0.0000  +/-/0=3/2/20
+            Wilcoxon p=0.6803   sign p=1   r_rb=+0.200   [ns]
+  rf     | p@50     | (S+T+C) - S        | median=+0.0000  mean=+0.0136  +/-/0=10/2/13
+            Wilcoxon p=0.02843   sign p=0.03857   r_rb=+0.705   [ns]
+  rf     | p@100    | (S+T) - S          | median=+0.0100  mean=+0.0084  +/-/0=14/4/7
+            Wilcoxon p=0.007249   sign p=0.03088   r_rb=+0.696   [REJECT_H0]
+  rf     | p@100    | (S+T+C) - (S+T)    | median=+0.0000  mean=-0.0000  +/-/0=3/3/19
+            Wilcoxon p=0.5164   sign p=1   r_rb=-0.286   [ns]
+  rf     | p@100    | (S+T+C) - S        | median=+0.0100  mean=+0.0084  +/-/0=13/4/8
+            Wilcoxon p=0.0129   sign p=0.04904   r_rb=+0.680   [REJECT_H0]

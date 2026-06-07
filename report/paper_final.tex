@@ -1,0 +1,1346 @@
+% =========================================================
+% Community-Aware Early Warning of Distrust Emergence
+% in Temporal Bitcoin Trust Networks
+%
+% IEEE conference paper draft.
+% Compile with pdflatex; uses IEEEtran.cls (IEEEtran v1.8b or later).
+%
+% This is the integrated final version: rolling-origin and paired
+% statistical testing are now the primary evidence; the locked
+% single-fold analysis (bootstrap, ROC/PR curve overlays, feature
+% importance) is preserved as Section~\ref{sec:results:locked}
+% (secondary). A compact comparison with heuristic baselines and
+% LightGBM is added as Section~\ref{sec:results:baselines}.
+% =========================================================
+\documentclass[conference]{IEEEtran}
+
+\IEEEoverridecommandlockouts
+% packages
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{hyperref}
+\hypersetup{hidelinks}
+
+% Avoid IEEEtran title-style font conflicts
+\def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
+    T\kern-.1667em\lower.7ex\hbox{E}\kern-.125emX}}
+
+% Inline code shortcut
+\newcommand{\code}[1]{\texttt{#1}}
+
+
+\begin{document}
+
+% =========================================================
+% TITLE BLOCK
+% =========================================================
+\title{Community-Aware Early Warning of Distrust Emergence \\
+in Temporal Bitcoin Trust Networks}
+
+\author{
+\IEEEauthorblockN{\"Omer Faruk G\"uler}
+\IEEEauthorblockA{
+Hacettepe University\\
+Ankara, Turkey\\
+omer55glr@gmail.com
+}
+}
+
+\maketitle
+
+% =========================================================
+% ABSTRACT
+% =========================================================
+\begin{abstract}
+Bitcoin-OTC was a peer-rated trust marketplace whose users rated each
+other on a $[-10, +10]$ scale, producing a signed, weighted, directed,
+timestamped social network. We study early warning of \emph{new
+negative} trust edges: at the end of month $t$, can we rank ordered
+pairs of users by their risk of receiving a new negative directed
+rating in month $t{+}1$, using only information available at time $t$?
+We build an interpretable, leakage-controlled pipeline with cumulative
+monthly snapshots and a three-way feature ablation
+(structural; structural + temporal; structural + temporal + community-aware)
+under Logistic Regression and Random Forest, with Louvain communities
+extracted per snapshot. We evaluate under a rolling-origin protocol
+over 25 disjoint single-month test folds covering 425 total positive
+events. Adding temporal features yields a statistically significant
+ROC-AUC improvement under both models (paired Wilcoxon
+$p \leq 1.4\!\times\!10^{-4}$ after Holm-Bonferroni correction on
+four pre-declared primary tests; matched-pairs rank-biserial
+$r_{\mathrm{rb}} \approx +0.8$), and a significant Random Forest PR-AUC
+improvement ($p = 6.3\!\times\!10^{-4}$, $r_{\mathrm{rb}} = +0.74$). A
+parameter-free recency-only ranker already reaches ROC-AUC $0.886$ on
+the same protocol -- comparable to structural-only learned models --
+so a substantial fraction of the temporal gain is attributable to
+recency alone; the engineered temporal family adds a real but modest
+increment above pure recency. Adding community-aware features on top
+of temporal features yields a small, directionally consistent Random
+Forest PR-AUC gain (19 of 25 folds positive; sign test $p = 0.015$;
+Wilcoxon $p = 0.048$, marginal under the pre-declared threshold) and
+does not improve ROC-AUC ($p = 0.096$); under Logistic Regression the
+community effect is undetectable on any metric, and under LightGBM
+the community PR-AUC effect is not detectable
+(mean $-0.007$, $p = 0.51$). We therefore frame temporal lift as
+the robust headline finding and community lift as a small,
+model-dependent refinement under Random Forest. Precision@$k$ proves
+unstable under the rolling protocol -- per-fold median P@50 is zero --
+and is reported as a supplementary metric.
+\end{abstract}
+
+\begin{IEEEkeywords}
+signed networks, temporal link prediction, community detection,
+Louvain, Random Forest, rolling-origin evaluation, Wilcoxon
+signed-rank test, Bitcoin-OTC, weak ties.
+\end{IEEEkeywords}
+
+% =========================================================
+\section{Introduction}
+% =========================================================
+
+Online trust marketplaces let participants rate one another so that
+newcomers can assess the reliability of potential counterparties.
+Bitcoin-OTC, an over-the-counter cryptocurrency marketplace, hosted
+such a web-of-trust between 2010 and early 2016. Each rating is a
+directed signed weighted timestamped event: user $u$ assigns user $v$
+an integer rating in $[-10, +10]$, and the rating is stored with its
+timestamp. The resulting graph is one of the canonical benchmarks for
+signed network analysis~\cite{kumar2016}.
+
+This paper studies \emph{early warning of distrust emergence}: given
+the network at the end of month $t$, we want to rank ordered pairs
+$(u, v)$ by the probability that $v$ will receive a new \emph{negative}
+directed rating from $u$ in month $t+1$. Useful applications include
+marketplace moderation, fraud surveillance, and reputation governance.
+The task differs from generic link prediction in three ways. First,
+negative ratings are rare: only about 10\% of edges in Bitcoin-OTC are
+negative, and new negative events per month are far rarer still.
+Second, the task is sign-dependent: predicting any new edge and
+predicting a new negative edge are different problems, and positive-edge
+popularity heuristics do not directly transfer. Third, the evaluation
+must respect the arrow of time -- a model that uses post-$t$
+information would not be deployable for warning.
+
+Our research question is:
+\begin{quote}
+At snapshot $t$, can we predict whether an ordered pair $(u, v)$ --
+either previously unconnected, or connected only positively -- will
+receive a new negative directed edge in the window
+$(t, t{+}1]$, using only information available at time $t$?
+\end{quote}
+
+Our contributions are:
+\begin{itemize}
+\item An interpretable feature-based pipeline -- classical
+link-prediction, signed structural, trust-summary, temporal, and
+community-aware features -- with explicit leakage controls and a
+time-based candidate generation procedure.
+\item A three-way feature ablation (structural; structural + temporal;
+structural + temporal + community) under Logistic Regression and
+Random Forest.
+\item A \emph{rolling-origin evaluation} over 25 disjoint single-month
+test folds (425 total positive events), with paired per-fold metric
+deltas across feature sets.
+\item Formal paired statistical testing on per-fold deltas: two-sided
+Wilcoxon signed-rank and exact binomial sign tests, with
+Holm-Bonferroni correction on a pre-declared primary family of four
+tests and Benjamini-Hochberg FDR control on twenty secondary tests.
+\item A comparison of the feature-based pipeline against four
+parameter-free heuristic baselines and LightGBM, evaluated under the
+same rolling-origin protocol, to assess how much of the temporal
+gain is captured by simple recency information and whether a stronger
+tabular learner improves the picture.
+\item A descriptive analysis of community structure and weak-tie
+signals, separating global feature-level evidence from a small local
+top-of-ranked-list diagnostic.
+\end{itemize}
+
+The pipeline is intentionally lighter than the deep signed-graph
+methods surveyed by Zhang \emph{et al.}~\cite{zhang2024}. Our goal is
+interpretable analysis on a single dataset; we do not claim
+state-of-the-art absolute performance.
+
+% =========================================================
+\section{Related Work}
+% =========================================================
+
+\textbf{Signed networks and weighted trust prediction.} The
+Bitcoin-OTC and Bitcoin-Alpha datasets, together with the iterative
+\emph{fairness} and \emph{goodness} statistics for nodes, were
+introduced by Kumar \emph{et al.}~\cite{kumar2016}. We do not
+reimplement iterated fairness/goodness here; instead, we use four
+lightweight per-node trust-summary features (mean rating given, mean
+rating received, negative-given ratio, negative-received ratio) as a
+deliberately simple analogue.
+
+\textbf{Behavioral dynamics on Bitcoin-OTC.} Bertazzi
+\emph{et al.}~\cite{bertazzi2018} analyze the multilayer structure of
+the Bitcoin-OTC web of trust, contrasting rewarding and punitive
+behaviors at the network level. This motivates our temporal framing
+and the inclusion of recency-based features (days since last activity,
+recent-window counts, and exponentially decayed aggregates).
+
+\textbf{Community-aware temporal prediction.}
+Choudhury~\cite{choudhury2024} develops community-aware dynamic
+similarity features for supervised link prediction on dynamic
+networks, arguing that community structure carries predictive signal
+beyond pair-level topology. We operationalize this idea by running
+Louvain on the positive-edge projection of every snapshot and
+engineering community-aware pair features
+(\code{same\_community}, community sizes, \code{neighborhood\_overlap},
+and boundary fractions).
+
+\textbf{Deep signed graph learning.} Zhang \emph{et al.}~\cite{zhang2024}
+survey signed graph representation learning, including
+GNN-based approaches such as signed graph convolutional and attention
+networks. We use this body of work for positioning only: our approach
+is shallow and interpretable, and we do not benchmark against GNNs.
+
+\textbf{Classical heuristics and structural theory.} We use Common
+Neighbors, Jaccard similarity, Adamic-Adar~\cite{adamic2003}, and
+Preferential Attachment on the undirected any-sign projection of the
+snapshot graph. Our community-aware features include the
+neighborhood-overlap diagnostic associated with Granovetter's
+strength-of-weak-ties hypothesis~\cite{granovetter1973}. Louvain
+community detection follows Blondel \emph{et al.}~\cite{blondel2008}.
+
+% =========================================================
+\section{Dataset and Problem Formulation}
+% =========================================================
+
+\subsection{Bitcoin-OTC and basic terminology}
+Each row of the public dataset (file \code{soc-sign-bitcoinotc.csv},
+SNAP~\cite{snap}) is a single rating event with fields
+\code{(source, target, rating, timestamp)}. A \emph{node} is a user.
+A \emph{directed edge} $u \to v$ is a rating event from $u$ to $v$. The
+\emph{sign} of an edge is $+1$ if $\text{rating} > 0$ and $-1$ if
+$\text{rating} < 0$. The \emph{weight} of an edge is the integer
+rating in $[-10, +10]$. The \emph{timestamp} is a Unix-seconds float;
+the dataset spans 2010-11-08 to 2016-01-25, approximately 63 calendar
+months.
+
+After defensive cleaning (drop self-loops and zero ratings; neither
+occurs in this file), the corpus has 35{,}592 rating events, 5{,}881
+distinct users, 32{,}029 positive and 3{,}563 negative ratings
+(approximately 9:1 imbalance), and reciprocity $0.79$. The giant
+weakly connected component has 5{,}875 nodes and the giant strongly
+connected component has 4{,}709 nodes. Fig.~\ref{fig:edges_per_month}
+shows the monthly interaction volume; Fig.~\ref{fig:rating_histogram}
+shows the rating distribution.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{results/figures/edges_per_month.png}
+\caption{Monthly interaction volume on Bitcoin-OTC, Nov-2010 through
+Jan-2016. Activity grows through 2014--2015 and then collapses; the
+tail collapse motivates the eligibility filter discussed in
+Section~\ref{sec:setup}.}
+\label{fig:edges_per_month}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{results/figures/rating_histogram.png}
+\caption{Distribution of rating values across all events. Positive
+ratings (especially $+1$ and $+10$) dominate; negatives are a long left
+tail.}
+\label{fig:rating_histogram}
+\end{figure}
+
+\subsection{Cumulative monthly snapshots}
+We adopt a cumulative monthly schedule. For each month index $t \in
+\{0, \dots, 62\}$, the snapshot graph at time $t$ contains all events
+with timestamp at or before the end of month $t$. When the pair
+$(u, v)$ appears multiple times in the cumulative window, we collapse
+the multi-edge to its \emph{latest} rating before the end of month
+$t$. This encodes ``$u$'s current trust judgment of $v$'' and is used
+\emph{only for the snapshot graph state}. Temporal and history-based
+features instead use the full event history with
+$\mathrm{ts} \leq \mathrm{end\_of\_month}(t)$, preserving the
+underlying multi-event structure.
+
+From the directed snapshot graph $G^t_{\mathrm{dir}}$ we derive two
+undirected weighted projections: $G^t_{\mathrm{pos}}$ keeps only edges
+whose collapsed sign is $+1$, with weight equal to the number of
+distinct directed positive contributions; $G^t_{\mathrm{neg}}$ is the
+analogous negative projection.
+
+\subsection{The task}
+Given snapshot $t$, the target is a binary label per ordered candidate
+pair $(u, v)$:
+\begin{equation*}
+y(u, v) =
+\begin{cases}
+1, & \exists\,(u, v, r, \mathrm{ts}) \text{ with } r < 0 \\
+   & \text{and } \mathrm{end\_of\_month}(t) < \mathrm{ts} \\
+   & \quad\leq \mathrm{end\_of\_month}(t{+}1), \\
+0, & \text{otherwise.}
+\end{cases}
+\end{equation*}
+Both ``no new $u \to v$ event'' and ``only new positive $u \to v$
+events'' map to $y = 0$; only a new \emph{negative} directed rating
+counts. This includes the case where $u$ previously rated $v$
+positively but flips to negative in the next window, which is a
+legitimate form of distrust emergence and is therefore retained as a
+positive example.
+
+\subsection{Why ranking metrics rather than thresholded
+precision/recall}
+The candidate set for any non-trivial snapshot is large (approximately
+$1 \times 10^5$ to $2 \times 10^5$ ordered pairs after filtering;
+see Section~\ref{sec:method}), and the prior of $y = 1$ is on the
+order of $10^{-4}$. At this imbalance, a threshold-$0.5$ classifier is
+not a meaningful operating point. A model with
+\code{class\_weight = 'balanced'} tends to predict the positive class
+at unrealistic precision; a default Random Forest predicts essentially
+no positives. Threshold-dependent precision, recall, and F1 are
+therefore nearly uninformative in this regime. We focus on
+\emph{ranking} metrics: ROC-AUC, PR-AUC (average precision), and
+Precision@$k$ for small $k$. Precision@$k$ proves unstable across
+folds and is reported as supplementary
+(Section~\ref{sec:results:community}); ROC-AUC and PR-AUC carry the
+inferential weight.
+
+% =========================================================
+\section{Methodology}\label{sec:method}
+% =========================================================
+
+\subsection{Core node filtering}
+A node $n$ is \emph{core at snapshot $t$} iff (a) its total
+interactions (in + out events) up to $\mathrm{end\_of\_month}(t)$ is at
+least \code{MIN\_ACTIVITY = 3}, and (b) its most recent activity is
+within \code{RECENT\_DAYS = 180} of $\mathrm{end\_of\_month}(t)$. Both
+thresholds are configuration parameters; we adopt these values as
+starting defaults and do not sweep them.
+
+\subsection{Candidate pair generation}
+For each snapshot $t$, candidate ordered pairs $(u, v)$ satisfy:
+(1)~$u, v \in \mathrm{Core}(t)$ and $u \neq v$;
+(2)~$v$ is within \code{K\_HOP = 2} hops of $u$ on the undirected
+any-sign projection of $G^t_{\mathrm{dir}}$;
+(3)~there is no existing \emph{negative} directed edge $u \to v$ at
+time $t$ -- pairs with a prior \emph{positive} $u \to v$ are retained,
+because a rating flip from positive to negative in the next window is
+itself distrust emergence;
+(4)~the total candidate count is capped at
+\code{MAX\_CANDIDATES = 200{,}000} via fixed-seed uniform
+downsampling. The cap binds only at the densest mid-period snapshots.
+
+\subsection{Label generation and leakage control}
+Labels are derived from the raw event history in the window
+$(\mathrm{end\_of\_month}(t), \mathrm{end\_of\_month}(t{+}1)]$. A
+defensive assertion in every feature precompute confirms that the
+maximum timestamp used during feature computation does not exceed
+$\mathrm{end\_of\_month}(t)$.
+
+\subsection{Feature families}
+The full feature vector has 36 columns split across five families:
+
+\textbf{Classical link prediction (4 features).} Common Neighbors,
+Jaccard similarity, Adamic-Adar~\cite{adamic2003}, Preferential
+Attachment, all computed on the undirected any-sign projection of
+$G^t_{\mathrm{dir}}$.
+
+\textbf{Signed structural (8 features).} Positive and negative
+out-degree of $u$; positive and negative in-degree of $v$; positive
+and negative common-neighbor counts (on $G^t_{\mathrm{pos}}$ and
+$G^t_{\mathrm{neg}}$ respectively); reciprocity flag (1 if $v \to u$
+exists in $G^t_{\mathrm{dir}}$); prior-interaction flag (1 if
+$u \to v$ exists in $G^t_{\mathrm{dir}}$ -- necessarily a positive
+prior, by construction of the candidate set, so this flag is partly
+degenerate and we report it transparently).
+
+\textbf{Trust summary (4 features).} Mean rating given by $u$; mean
+rating received by $v$; fraction of $u$'s given ratings that were
+negative; fraction of $v$'s received ratings that were negative.
+These are a deliberately simple, non-iterated analogue of the
+fairness/goodness statistics in~\cite{kumar2016}.
+
+\textbf{Temporal / recency (12 features).} Days since $u$'s last
+activity; days since $v$'s last activity; days since the last
+$u \to v$ interaction (sentinel value $9999$ when no prior $u \to v$
+event exists); count of past $u \to v$ events; recent-window (90-day)
+counts of negatives given by $u$, negatives received by $v$, total
+events given by $u$, total events received by $v$; and four
+exponentially decayed aggregates with half-life $\tau = 60$ days
+(decayed total activity and decayed negative count, for both $u$ and
+$v$).
+
+\textbf{Community-aware (8 features).} \code{same\_community}
+indicator; its complement \code{cross\_community\_pair};
+\code{community\_size\_u}, \code{community\_size\_v}; the log-size
+gap $|\log s_u - \log s_v|$;
+\code{neighborhood\_overlap} $= |N(u) \cap N(v) \setminus \{u,v\}|
+/ |N(u) \cup N(v) \setminus \{u,v\}|$ on the undirected any-sign
+projection; and \code{boundary\_frac\_u}, \code{boundary\_frac\_v},
+each defined for a node $n$ as the fraction of $n$'s neighbors in
+$G^t_{\mathrm{pos}}$ whose Louvain community differs from $n$'s.
+
+\subsection{Community extraction}\label{sec:method:community}
+For each snapshot $t$ we run Louvain~\cite{blondel2008} on the
+positive-edge undirected weighted graph $G^t_{\mathrm{pos}}$. Louvain
+is stochastic; we fix \code{random\_state} and cache the resulting
+partition per snapshot so that downstream community-feature
+extraction is deterministic. Across the 37 split snapshots (see
+Section~\ref{sec:setup}) modularity sits in $[0.47, 0.52]$ with a slight
+upward trend, while the number of communities grows from $\sim 17$ at
+$t = 13$ to $\sim 40$--$47$ at $t = 49$ (Fig.~\ref{fig:modularity}).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{results/figures/modularity_over_time.png}
+\caption{Louvain modularity (left axis) and number of communities
+(right axis) on the per-snapshot positive-edge graph
+$G^t_{\mathrm{pos}}$. Modularity is stable in $[0.47, 0.52]$; the
+community count grows roughly linearly as the network grows. Dotted
+lines mark the train\,/\,val and val\,/\,test boundaries of the
+locked single-fold analysis (Section~\ref{sec:results:locked}).}
+\label{fig:modularity}
+\end{figure}
+
+\subsection{Models}
+We train three models per feature set: (i) a \emph{random baseline}
+that draws uniform probabilities (seeded), to calibrate the floor on
+each metric; (ii) \emph{Logistic Regression} with \code{StandardScaler}
+and \code{class\_weight = 'balanced'}, \code{liblinear} solver,
+\code{max\_iter = 2000}; (iii) \emph{Random Forest} with
+\code{n\_estimators = 200}, \code{min\_samples\_leaf = 20},
+\code{class\_weight = 'balanced\_subsample'}. We perform no
+hyperparameter tuning beyond these defaults; the focus is feature
+engineering and ablation. Section~\ref{sec:results:baselines}
+additionally evaluates four parameter-free heuristic baselines and a
+fixed-configuration LightGBM as a stronger learner.
+
+\subsection{Training-set negative subsampling}
+The training data for any rolling-origin fold (Section~\ref{sec:setup})
+contains on the order of $10^{6}$ candidate pairs and only a few
+hundred positives. To keep training tractable while preserving all
+positives, we subsample negatives in TRAIN to a $100{:}1$
+negative:positive ratio. Validation and test sets remain complete;
+this is a training acceleration, not an evaluation trick. A fixed
+RNG seed makes the subsample identical across feature sets and models
+within a fold, so per-fold paired comparisons between feature sets
+within a model are valid.
+
+\subsection{Evaluation metrics}
+We report ROC-AUC, PR-AUC (average precision), and Precision@$k$ for
+$k \in \{50, 100\}$. Threshold metrics (precision, recall, F1 at the
+default 0.5 cutoff) are recorded but read as uninformative at the
+present imbalance; we do not use them for inference.
+
+% =========================================================
+\section{Experimental Setup}\label{sec:setup}
+% =========================================================
+
+\subsection{Eligible snapshot pool}
+A snapshot is \emph{eligible} for evaluation if (i) its next-month
+window contains at least \code{MIN\_POS\_FOR\_SPLIT = 10} raw new
+negative events, and (ii) it sits in the longest contiguous block of
+eligible snapshots (this excludes a sporadic late-dataset island at
+$t = 53$). The resulting eligible pool is $t \in \{13, \dots, 49\}$
+(37 snapshots).
+
+\subsection{Rolling-origin evaluation protocol (primary)}
+\label{sec:setup:rolling}
+
+Our primary evaluation is an expanding-window rolling-origin protocol
+over the eligible pool. For each fold index
+$k \in \{25, 26, \dots, 49\}$ (25 disjoint single-month test folds):
+\begin{itemize}
+\item TRAIN  = candidate pairs from snapshots $\{13, \dots, k{-}2\}$,
+\item VAL    = candidate pairs from snapshot $\{k{-}1\}$ (held out; not used for tuning),
+\item TEST   = candidate pairs from snapshot $\{k\}$.
+\end{itemize}
+We use an expanding-window TRAIN rather than a sliding window because
+positive events are rare and discarding early ones would weaken
+training. We use single-month TEST windows rather than two-month
+windows because they maximize the number of disjoint folds (25 vs
+$\sim$12), match an operational ``next-month watchlist'' deployment
+cadence, and produce fold-level metric vectors directly usable for
+paired non-parametric tests. The total number of positive test events
+across all folds is $\sum_{k} n_{\mathrm{pos}}(k) = 425$, an
+approximately $12\!\times$ increase over the single locked fold
+described in Section~\ref{sec:setup:locked}.
+
+For each fold and each (model, feature set) combination, we fit a
+fresh model on the fold's TRAIN with the same $100{:}1$ training
+negative subsampling as in Section~\ref{sec:method}, score the fold's
+TEST, and record ROC-AUC, PR-AUC, Precision@50, and Precision@100.
+All seeds are fixed; within a fold the training subsample is
+identical across (model, feature set), so per-fold deltas across
+feature sets are properly paired.
+
+\subsection{Paired statistical testing on per-fold deltas}
+\label{sec:setup:stats}
+
+On the $n = 25$ per-fold deltas we compute, per (model, comparison,
+metric):
+\begin{itemize}
+\item a two-sided paired Wilcoxon signed-rank test
+(\code{zero\_method='wilcox'});
+\item a two-sided exact binomial sign test on the direction counts;
+\item the matched-pairs rank-biserial correlation
+$r_{\mathrm{rb}} = (W_+ - W_-)/(W_+ + W_-)$ as a Wilcoxon effect
+size.
+\end{itemize}
+
+We declare a small \emph{primary family} of four tests in advance --
+the ones we consider central to the paper's question: RF (S+T) - S on
+ROC-AUC, RF (S+T) - S on PR-AUC, RF (S+T+C) - (S+T) on PR-AUC, and
+LR (S+T) - S on ROC-AUC. We control family-wise error at
+$\alpha = 0.05$ on this primary set with Holm-Bonferroni. All other
+(model, comparison, metric) combinations form a secondary family, on
+which we control the false-discovery rate at $q = 0.05$ with
+Benjamini-Hochberg. We report raw p-values, the corrected reject
+decision, and the rank-biserial effect size for every test. When the
+per-fold delta is exactly zero on many folds (particularly for
+Precision@$k$, where the discrete probability grid produces many
+ties), the Wilcoxon test becomes unreliable and we rely on the sign
+test only.
+
+\subsection{Held-out single-fold analysis (secondary)}
+\label{sec:setup:locked}
+
+For continuity with prior pipeline stages and to support the bootstrap
+analysis in Section~\ref{sec:results:bootstrap}, we also retain the
+last two eligible snapshots ($t \in \{48, 49\}$) as a single locked
+held-out fold, with the immediately preceding two snapshots
+($t \in \{46, 47\}$) as a tuning-free validation set
+(Table~\ref{tab:split}). All numbers from this single fold are
+reported in Section~\ref{sec:results:locked}; they are kept as a
+secondary analysis. The headline numerical claims in this paper come
+from the rolling-origin protocol.
+
+\begin{table}[t]
+\caption{Locked single held-out fold. Used in
+Section~\ref{sec:results:locked} for the bootstrap analysis, ROC/PR
+curve overlays, and feature importance; the headline numerical
+claims come from the rolling-origin protocol of
+Section~\ref{sec:setup:rolling}.}
+\label{tab:split}
+\centering
+\begin{tabular}{lccc}
+\toprule
+Split & Snapshots & Pairs & Positives \\
+\midrule
+TRAIN & $t = 13 \dots 45$ & 5{,}013{,}346 & 545 \\
+VAL   & $t = 46, 47$      &   184{,}648   &  16 \\
+TEST  & $t = 48, 49$      &   148{,}639   &  34 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Bootstrap protocol (for the locked single fold)}
+\label{sec:setup:bootstrap}
+For the locked single-fold analysis we attach uncertainty estimates
+with a paired stratified bootstrap. For $B = 1000$ iterations, we
+draw 34 positive indices with replacement and 148{,}605 negative
+indices with replacement (preserving the original prevalence and
+guaranteeing both labels in every resample). The same resample index
+vector is reused across all three feature sets within one model, so
+deltas such as
+$(\mathrm{S}{+}\mathrm{T}{+}\mathrm{C}) - (\mathrm{S}{+}\mathrm{T})$
+are properly paired. We add a $\mathcal{U}[0, 10^{-12}]$ jitter to RF
+probabilities before top-$k$ ranking to randomize ties on the
+discrete $1/200$ leaf-vote grid without perturbing non-tied rankings.
+We report 95\% percentile confidence intervals and the
+bootstrap-positive share $\mathrm{frac\_boot}(>0)$; this share is
+\emph{not} a frequentist p-value, and we interpret a CI that overlaps
+zero as ``not distinguishable from sampling noise on this test set.''
+This analysis quantifies uncertainty conditional on the locked fold;
+the rolling-origin protocol of Section~\ref{sec:setup:rolling}
+provides the cross-fold significance picture.
+
+\subsection{Reproducibility and artifacts}
+All seeds (model fits, training subsample, Louvain partition,
+bootstrap) are fixed at $42$. Intermediate parquet files and the
+locked-fold test-probability matrix
+(\code{results/test\_predictions.parquet}) are persisted so that
+downstream analysis re-runs without re-training. Per-fold rolling-origin
+probabilities for the Random Forest S$+$T$+$C model are stored under
+\code{results/rolling\_predictions/}. Code is organized in
+\code{src/} and \code{scripts/}; the headline numbers in
+Section~\ref{sec:results} come from
+\code{results/rolling\_eval\_per\_fold.csv} (rolling-origin),
+\code{results/rolling\_stats\_tests.csv} (paired tests),
+\code{results/stronger\_baselines\_per\_fold.csv} (heuristics and
+LightGBM), and
+\code{results/test\_metrics\_from\_predictions.csv} (locked fold).
+
+% =========================================================
+\section{Results}\label{sec:results}
+% =========================================================
+
+We label feature sets S (structural + trust summary, 16 columns),
+S$+$T (+temporal, 28 columns), and S$+$T$+$C (+community, 36 columns).
+
+\subsection{Rolling-origin metrics}\label{sec:results:rolling}
+
+Table~\ref{tab:rolling_summary} reports across-fold mean and standard
+deviation per (model, feature set) over the $n = 25$ rolling-origin
+folds (total 425 positive test events). Adding temporal features
+clearly improves both ROC-AUC and PR-AUC under both models; adding
+community-aware features on top of temporal moves PR-AUC slightly
+upward under Random Forest while leaving Logistic Regression
+essentially unchanged.
+
+\begin{table}[t]
+\caption{Rolling-origin metrics across 25 single-month test folds
+(total 425 positives). Values are across-fold mean $\pm$ std.}
+\label{tab:rolling_summary}
+\centering
+\small
+\begin{tabular}{llcccc}
+\toprule
+F.\,set & Model & ROC-AUC & PR-AUC & P@50 & P@100 \\
+\midrule
+S       & lr & $0.889 \pm 0.077$ & $0.006 \pm 0.006$ & $0.012$ & $0.008$ \\
+S$+$T   & lr & $0.930 \pm 0.046$ & $0.007 \pm 0.008$ & $0.014$ & $0.010$ \\
+S$+$T$+$C & lr & $0.928 \pm 0.048$ & $0.007 \pm 0.009$ & $0.014$ & $0.010$ \\
+\addlinespace
+S       & rf & $0.881 \pm 0.073$ & $0.006 \pm 0.011$ & $0.009$ & $0.008$ \\
+S$+$T   & rf & $0.924 \pm 0.054$ & $0.014 \pm 0.023$ & $0.022$ & $0.016$ \\
+S$+$T$+$C & rf & $0.920 \pm 0.058$ & $0.017 \pm 0.029$ & $0.022$ & $0.016$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Paired statistical tests}\label{sec:results:tests}
+
+Table~\ref{tab:primary_tests} reports the four pre-declared primary
+tests on the per-fold deltas, with Holm-Bonferroni decisions at
+$\alpha = 0.05$. All four nulls are rejected after correction, but
+the RF community PR-AUC test is marginal -- its Wilcoxon $p = 0.048$
+sits at the loosest Holm threshold. The sign-test p-value
+($p = 0.015$) on the same comparison is more robust to ties.
+Fig.~\ref{fig:paired_deltas} visualizes the per-fold deltas for
+these four comparisons.
+
+\begin{table}[t]
+\caption{Primary paired statistical tests on rolling-origin per-fold
+deltas ($n = 25$; two-sided paired Wilcoxon signed-rank;
+Holm-Bonferroni at $\alpha = 0.05$). $r_{\mathrm{rb}}$ is the
+matched-pairs rank-biserial effect size.}
+\label{tab:primary_tests}
+\centering
+\small
+\begin{tabular}{llccc}
+\toprule
+Comparison & Metric & Wilcoxon $p$ & sign $p$ & $r_{\mathrm{rb}}$ \\
+\midrule
+RF $(\mathrm{S}{+}\mathrm{T}) - \mathrm{S}$       & ROC-AUC & $4.5{\times}10^{-5}^{\dagger}$ & $1.6{\times}10^{-4}$ & $+0.85$ \\
+LR $(\mathrm{S}{+}\mathrm{T}) - \mathrm{S}$       & ROC-AUC & $1.4{\times}10^{-4}^{\dagger}$ & $9.1{\times}10^{-4}$ & $+0.81$ \\
+RF $(\mathrm{S}{+}\mathrm{T}) - \mathrm{S}$       & PR-AUC  & $6.3{\times}10^{-4}^{\dagger}$ & $9.1{\times}10^{-4}$ & $+0.74$ \\
+RF $(\mathrm{S}{+}\mathrm{T}{+}\mathrm{C}) - (\mathrm{S}{+}\mathrm{T})$ & PR-AUC  & $4.8{\times}10^{-2}^{\dagger}$ & $1.5{\times}10^{-2}$ & $+0.45$ \\
+\bottomrule
+\end{tabular}\\[2pt]
+\raggedright\footnotesize${}^{\dagger}$ rejects $H_0$ after Holm-Bonferroni at $\alpha = 0.05$.
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{results/figures/rolling_paired_deltas.png}
+\caption{Per-fold paired deltas for the four primary comparisons
+(blue: positive fold; red: negative fold).}
+\label{fig:paired_deltas}
+\end{figure}
+
+Among secondary tests (Benjamini-Hochberg FDR $q = 0.05$): the full
+$\mathrm{S} \to \mathrm{S}{+}\mathrm{T}{+}\mathrm{C}$ delta is
+significant on both metrics and both models;
+$\mathrm{LR}\,(\mathrm{S}{+}\mathrm{T}) - \mathrm{S}$ on PR-AUC is
+significant despite a small absolute magnitude;
+$\mathrm{RF}\,(\mathrm{S}{+}\mathrm{T}) - \mathrm{S}$ on
+Precision@100 is significant. No community-vs-temporal ROC-AUC test
+reaches significance: RF (S+T+C) - (S+T) ROC-AUC has $p = 0.096$ with
+only 10/25 folds positive, consistent with saturation; LR (S+T+C) -
+(S+T) ROC-AUC has $p = 0.47$. LR community-vs-temporal PR-AUC is
+also null ($p = 0.35$). Most Precision@$k$ tests either fail to
+reach significance after correction or are flagged unreliable
+because of tied zeros.
+
+\subsection{Temporal ablation}\label{sec:results:temporal}
+
+The temporal-over-structural ROC-AUC delta is positive in 22 of 25
+RF folds (median $+0.031$, mean $+0.044$) and in 21 of 25 LR folds
+(median $+0.036$, mean $+0.041$). Both pass Holm correction with
+very small p-values and large effect sizes
+($r_{\mathrm{rb}} \approx +0.85$ and $+0.81$).
+
+The Random Forest temporal PR-AUC delta is also significant after
+Holm correction (Wilcoxon $p = 6.3\!\times\!10^{-4}$, sign-test
+$p = 9.1\!\times\!10^{-4}$, $r_{\mathrm{rb}} = +0.74$), with 21 of
+25 folds positive. The Logistic Regression temporal PR-AUC delta is
+significant under the secondary BH correction
+($p = 3.4\!\times\!10^{-3}$), but its mean magnitude ($+0.002$) is
+small in absolute terms.
+
+The temporal feature family is internally redundant by design:
+recent-window counts and exponentially decayed aggregates carry
+overlapping information, with within-pair correlations $\geq 0.9$
+for some pairs. We retain both for transparency. The qualitative
+weight of this lift is examined further in
+Section~\ref{sec:results:baselines}, where a parameter-free
+recency-only ranker turns out to capture a substantial fraction of
+it.
+
+\subsection{Community-aware ablation}\label{sec:results:community}
+
+\textbf{Community PR-AUC under Random Forest is small but
+directionally consistent.} The (S+T+C) - (S+T) PR-AUC delta is
+positive in 19 of 25 folds, with median $+0.001$ and mean $+0.003$.
+The Wilcoxon test sits right at the Holm threshold
+($p = 0.048$); the sign test is more robust ($p = 0.015$). The
+rank-biserial effect size $r_{\mathrm{rb}} = +0.45$ is in the medium
+range. We describe this gain as small but directionally consistent
+across folds, with marginal statistical support. The effect is also
+model-specific: under LightGBM the same comparison has a slightly
+negative point estimate (Section~\ref{sec:results:baselines}).
+
+\textbf{Community does not improve ROC-AUC over temporal.} The
+(S+T+C) - (S+T) ROC-AUC delta is positive in only 10 of 25 RF folds
+($p = 0.096$, $r_{\mathrm{rb}} = -0.39$) and 12 of 25 LR folds
+($p = 0.47$). The Random Forest direction is mildly negative on
+average, consistent with ROC-AUC saturating at the $+$T level rather
+than with community features being harmful.
+
+\textbf{Logistic Regression shows no community gain on any metric.}
+This is consistent with the community signal being non-linear and
+inaccessible to a linear model on these features.
+
+At the descriptive level, the data are not consistent with the
+naive ``distrust at community boundaries'' reading. Aggregating
+across all rolling-fold training blocks, same-community pairs have
+an empirical positive rate of $0.0140\%$ ($215 / 1{,}540{,}969$)
+while cross-community pairs are at $0.0095\%$ ($330 / 3{,}472{,}377$);
+same-community pairs are slightly \emph{more} likely to receive a
+new negative rating in the next window (Fig.~\ref{fig:samecross}).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.85\columnwidth]{results/figures/same_vs_cross_positive_rate.png}
+\caption{Aggregate training positive rate by community membership.
+Same-community pairs are $\sim 47\%$ more likely to receive a new
+negative rating than cross-community pairs. The naive
+``cross-community distrust'' hypothesis is not supported.}
+\label{fig:samecross}
+\end{figure}
+
+In the fitted Logistic Regression on S$+$T$+$C,
+\code{neighborhood\_overlap} is the strongest single community
+feature (standardized coefficient $-1.36$, in the direction that
+lower shared-neighborhood predicts higher new-negative probability);
+it is also among the top-ranked community features in Random Forest
+(Tables~\ref{tab:imp_lr_topfam} and \ref{tab:imp_rf_topfam} in
+Section~\ref{sec:results:locked}). The coarse same/cross indicator
+carries little weight once \code{neighborhood\_overlap}, boundary
+fractions, and community sizes are present.
+
+\textbf{Precision@$k$ is unstable under rolling.} Per-fold median
+P@50 is zero for every (model, feature set), and median P@100 is at
+most $0.01$ for the best (model, feature set) combination. Most
+folds return no true positives in the top 50. We therefore demote
+Precision@$k$ to a supplementary metric.
+
+\subsection{Comparison with stronger baselines}
+\label{sec:results:baselines}
+
+To test whether the temporal lift is genuinely broader than a
+trivial recency effect, and to bound the headroom for a stronger
+tabular learner, we add (i) four parameter-free heuristic baselines
+and (ii) LightGBM with a single fixed configuration, evaluated under
+the same rolling-origin protocol of Section~\ref{sec:setup:rolling}.
+
+\textbf{Recency-only ranker.} The recency-only heuristic is a
+within-fold rank-sum
+$\sum_j \mathrm{sign}_j \cdot \mathrm{rank}_j(x_j)$ over six recency
+features (days-since-last-activity for $u$ and $v$; recent and
+exponentially-decayed negative counts on both sides). Signs are
+hand-chosen for intuitive directionality; no parameters are learned.
+Across the 25 folds it reaches ROC-AUC
+$0.886 \pm 0.062$, statistically indistinguishable from
+structural-only Logistic Regression ($0.889 \pm 0.077$) and Random
+Forest ($0.881 \pm 0.073$). The learned $\mathrm{S}{+}\mathrm{T}$
+models still beat this heuristic clearly (RF $0.924$, LR $0.930$),
+but the headroom over a parameter-free recency baseline is
+$\sim 0.04$ ROC-AUC rather than the $\sim 0.07$ visible above the
+structural-only baseline. \emph{Much of what we labeled ``temporal
+lift'' in Section~\ref{sec:results:temporal} is recency lift}; the
+engineered temporal feature family adds a real but modest increment
+above pure recency.
+
+\textbf{Victim-, issuer-, and structural-only rank-sums.}
+Single-sided risk summaries do not suffice for the pair-level task.
+Victim-risk-only reaches ROC-AUC $0.698 \pm 0.109$, issuer-risk-only
+$0.755 \pm 0.127$, and a structural-only rank-sum (CN, Jaccard, AA,
+PA, reciprocity, prior interaction) $0.772 \pm 0.073$, all
+substantially below the learned models. Pair-level prediction
+requires combining both sides; one-sided summaries alone are not
+informative enough to compete.
+
+\textbf{LightGBM at a fixed untuned configuration does not
+outperform Random Forest on this task.} We use
+\code{n\_estimators=200}, \code{learning\_rate=0.05},
+\code{num\_leaves=31}, \code{min\_child\_samples=20}, and
+\code{scale\_pos\_weight}$ = n_-/n_+$; no hyperparameter search.
+LightGBM ROC-AUC is significantly below Random Forest on every
+feature set (Wilcoxon $p \leq 0.002$ under BH-FDR $q = 0.05$). On
+PR-AUC the comparison is mixed: LightGBM is slightly better on S
+and S$+$T but slightly worse on S$+$T$+$C. None of the four
+pre-declared LightGBM-centric primary tests
+(LGBM (S+T) - LGBM S on ROC-AUC and PR-AUC, LGBM (S+T+C) - LGBM
+(S+T) on PR-AUC, LGBM (S+T) - RF (S+T) on PR-AUC) survive
+Holm-Bonferroni; the temporal ROC-AUC lift under LightGBM is
+directionally consistent (17 of 25 folds positive) but does not
+reach the corrected threshold ($p = 0.017$, Holm threshold
+$0.0125$). We do not claim that LightGBM is fundamentally worse than
+Random Forest on this task; a more aggressive tuning could change the
+picture. We report the comparison to document that the interpretable
+Random Forest result is not obviously leaving accuracy on the table.
+
+\textbf{The community effect is not robust across model families.}
+Under Random Forest the (S$+$T$+$C) - (S$+$T) PR-AUC delta is small,
+positive, and marginally significant (Section~\ref{sec:results:community});
+under LightGBM the same delta has a slightly negative point estimate
+(mean $-0.007$, 14/25 folds positive, Wilcoxon $p = 0.51$). The
+(S$+$T$+$C) - (S$+$T) ROC-AUC delta is directionally positive under
+LightGBM ($+0.009$, 19/25 folds positive, $p = 0.026$) but null
+under Random Forest. The marginal Phase-D significance of the RF
+PR-AUC community effect therefore should not be read as a universal
+claim about community-aware features; the direction is
+model-dependent.
+
+\subsection{Held-out single-fold analysis (secondary)}
+\label{sec:results:locked}
+
+For continuity with prior pipeline stages,
+Table~\ref{tab:test_metrics} reports the locked single held-out fold
+metrics. The locked fold's RF (S$+$T$+$C) PR-AUC ($0.0703$) is well
+above the rolling-fold mean ($0.017$); the locked fold thus
+over-represents the magnitude of the community PR-AUC effect that is
+visible across all 25 folds. We retain the table, the curve
+overlays, the importance rankings, and the bootstrap analysis here
+because they remain informative about model behavior on a single
+representative fold, but the headline numerical claims in this paper
+come from the rolling-origin protocol of
+Section~\ref{sec:results:rolling}.
+
+\begin{table}[t]
+\caption{Held-out single-fold metrics ($t \in \{48, 49\}$;
+34 positives, 148{,}639 candidate pairs). Secondary to
+Table~\ref{tab:rolling_summary}.}
+\label{tab:test_metrics}
+\centering
+\begin{tabular}{llcccc}
+\toprule
+F.\,set & Model & ROC-AUC & PR-AUC & P@50 & P@100 \\
+\midrule
+S      & logreg & 0.909 & 0.0034 & 0.00 & 0.01 \\
+S$+$T   & logreg & 0.949 & 0.0059 & 0.00 & 0.01 \\
+S$+$T$+$C & logreg & 0.945 & 0.0058 & 0.00 & 0.01 \\
+\addlinespace
+S      & rf     & 0.880 & 0.0223 & 0.04 & 0.03 \\
+S$+$T   & rf     & 0.950 & 0.0400 & 0.08 & 0.07 \\
+S$+$T$+$C & rf     & 0.940 & 0.0703 & 0.10 & 0.06 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{ROC and PR curves on the locked fold}
+Fig.~\ref{fig:rf_roc} and Fig.~\ref{fig:rf_pr} overlay Random Forest
+ROC and PR curves for the three feature sets on the locked fold.
+The S$+$T (blue) and S$+$T$+$C (red) ROC curves nearly coincide in
+the operationally relevant low-FPR region; both are clearly above
+the structural-only S (grey) curve, visualizing the ROC saturation
+that the rolling-origin tests also report. The S$+$T$+$C PR curve
+sits visibly above S$+$T between recall $\sim 0.05$ and $\sim 0.30$
+on this fold. As noted in Table~\ref{tab:rolling_summary}, the
+average across-fold separation is much smaller; this locked fold is
+on the favorable end of the per-fold PR-AUC distribution.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{results/figures/test_rf_roc.png}
+\caption{Test ROC curves for Random Forest on the locked single fold.
+S$+$T and S$+$T$+$C are visually indistinguishable in the
+operationally relevant low-FPR region; both clearly dominate the
+structural-only S curve. Curve shapes generalize qualitatively;
+absolute AUC values on this single fold are above the rolling-origin
+average reported in Table~\ref{tab:rolling_summary}.}
+\label{fig:rf_roc}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{results/figures/test_rf_pr.png}
+\caption{Test precision-recall curves for Random Forest on the
+locked single fold, log precision axis. The community-augmented
+S$+$T$+$C curve sits visibly above S$+$T between recall $\sim 0.05$
+and $\sim 0.30$ on this fold; the rolling-origin average separation
+is substantially smaller (Table~\ref{tab:rolling_summary}). Dashed
+line marks the base rate of $2.29 \times 10^{-4}$.}
+\label{fig:rf_pr}
+\end{figure}
+
+Logistic Regression overlays (not shown; available on disk as
+\code{test\_logreg\_\{roc,pr\}.png}) tell a different story: the
+S$+$T and S$+$T$+$C curves are essentially indistinguishable, while
+S is below. This visually confirms the absence of any LR community
+gain.
+
+\subsubsection{Feature importance (qualitative)}
+Tables~\ref{tab:imp_lr_topfam} and~\ref{tab:imp_rf_topfam} list the
+top-5 features per family for each model on the S$+$T$+$C locked-fold
+fit. Coefficient magnitudes (LR) and Gini importances (RF) are
+qualitative diagnostics; the inferential conclusions are carried by
+the rolling-origin tests.
+
+\begin{table}[t]
+\caption{Top-5 features per family, Logistic Regression on S$+$T$+$C
+(standardized coefficients; $+$ drives the positive class). Locked-fold
+fit; qualitative diagnostic.}
+\label{tab:imp_lr_topfam}
+\centering
+\small
+\begin{tabular}{llr}
+\toprule
+Family & Feature & Coef. \\
+\midrule
+struct.\ & cn                          & $+1.28$ \\
+struct.\ & prior\_interaction          & $-1.17$ \\
+struct.\ & pos\_cn                     & $-1.09$ \\
+struct.\ & reciprocity\_flag           & $+0.88$ \\
+struct.\ & jaccard                     & $+0.88$ \\
+\addlinespace
+temp.\   & days\_since\_last\_activity\_u  & $-1.29$ \\
+temp.\   & days\_since\_last\_uv\_interaction & $+1.19$ \\
+temp.\   & uv\_interaction\_count\_past & $-1.17$ \\
+temp.\   & decayed\_total\_activity\_v & $+0.76$ \\
+temp.\   & decayed\_total\_activity\_u & $+0.71$ \\
+\addlinespace
+comm.\   & neighborhood\_overlap       & $-1.36$ \\
+comm.\   & boundary\_frac\_u           & $+0.17$ \\
+comm.\   & community\_size\_diff\_log  & $-0.10$ \\
+comm.\   & community\_size\_v          & $-0.09$ \\
+comm.\   & same\_community             & $+0.08$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\caption{Top-5 features per family, Random Forest on S$+$T$+$C
+(Gini importance). Locked-fold fit; qualitative diagnostic.}
+\label{tab:imp_rf_topfam}
+\centering
+\small
+\begin{tabular}{llr}
+\toprule
+Family & Feature & Importance \\
+\midrule
+struct.\ & aa                          & $0.050$ \\
+struct.\ & pa                          & $0.037$ \\
+struct.\ & neg\_in\_v                  & $0.034$ \\
+struct.\ & reciprocity\_flag           & $0.032$ \\
+struct.\ & neg\_received\_ratio\_v     & $0.030$ \\
+\addlinespace
+temp.\   & decayed\_total\_activity\_u & $0.109$ \\
+temp.\   & days\_since\_last\_activity\_u & $0.095$ \\
+temp.\   & recent\_total\_given\_u     & $0.053$ \\
+temp.\   & decayed\_neg\_received\_v   & $0.051$ \\
+temp.\   & decayed\_neg\_given\_u      & $0.051$ \\
+\addlinespace
+comm.\   & boundary\_frac\_v           & $0.018$ \\
+comm.\   & neighborhood\_overlap       & $0.018$ \\
+comm.\   & boundary\_frac\_u           & $0.017$ \\
+comm.\   & community\_size\_v          & $0.017$ \\
+comm.\   & community\_size\_u          & $0.016$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Bootstrap uncertainty on the locked fold}
+\label{sec:results:bootstrap}
+
+Tables~\ref{tab:boot_abs} and~\ref{tab:boot_delta} summarize the
+paired stratified bootstrap ($B = 1000$) on the locked single fold.
+These CIs quantify sampling uncertainty conditional on this fold;
+they are complementary to the rolling-origin Wilcoxon tests rather
+than primary. Note that the locked-fold community PR-AUC effect
+($+0.026$, 94\% of bootstrap resamples positive, CI
+$[-0.003, +0.068]$) is consistent in direction with the rolling
+result but several times larger than the across-fold mean of $+0.003$.
+
+\begin{table}[t]
+\caption{Bootstrap 95\% percentile CIs on absolute test metrics
+(Random Forest, locked single fold). Secondary to
+Table~\ref{tab:rolling_summary}.}
+\label{tab:boot_abs}
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+F.\,set & ROC-AUC & PR-AUC \\
+\midrule
+S        & $0.88$ $[0.80, 0.94]$ & $0.030$ $[0.003, 0.097]$ \\
+S$+$T    & $0.95$ $[0.92, 0.97]$ & $0.052$ $[0.011, 0.131]$ \\
+S$+$T$+$C & $0.94$ $[0.90, 0.97]$ & $0.079$ $[0.012, 0.180]$ \\
+\midrule
+F.\,set & P@50 & P@100 \\
+\midrule
+S        & $0.05$ $[0.00, 0.12]$ & $0.03$ $[0.00, 0.07]$ \\
+S$+$T    & $0.08$ $[0.02, 0.16]$ & $0.07$ $[0.02, 0.11]$ \\
+S$+$T$+$C & $0.09$ $[0.02, 0.18]$ & $0.06$ $[0.03, 0.11]$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\caption{Bootstrap 95\% percentile CIs on paired metric deltas
+(Random Forest, locked single fold). \emph{frac\_boot} is the share
+of resamples with $\Delta > 0$; it is not a p-value.}
+\label{tab:boot_delta}
+\centering
+\small
+\begin{tabular}{lllc}
+\toprule
+$\Delta$ & Metric & 95\% CI & frac\_boot \\
+\midrule
+$(\mathrm{S}{+}\mathrm{T}) - \mathrm{S}$
+  & ROC-AUC & $[+0.028, +0.123]$ & $1.000$ \\
+  & PR-AUC  & $[-0.021, +0.082]$ & $0.849$ \\
+  & P@50    & $[-0.040, +0.100]$ & $0.755$ \\
+  & P@100   & $[-0.000, +0.080]$ & $0.915$ \\
+\addlinespace
+$(\mathrm{S}{+}\mathrm{T}{+}\mathrm{C}) - (\mathrm{S}{+}\mathrm{T})$
+  & ROC-AUC & $[-0.027, +0.002]$ & $0.073$ \\
+  & PR-AUC  & $[-0.003, +0.068]$ & $0.935$ \\
+  & P@50    & $[+0.000, +0.060]$ & $0.465$ \\
+  & P@100   & $[-0.030, +0.020]$ & $0.157$ \\
+\addlinespace
+$(\mathrm{S}{+}\mathrm{T}{+}\mathrm{C}) - \mathrm{S}$
+  & ROC-AUC & $[+0.015, +0.113]$ & $0.998$ \\
+  & PR-AUC  & $[+0.006, +0.120]$ & $0.999$ \\
+  & P@50    & $[-0.020, +0.120]$ & $0.850$ \\
+  & P@100   & $[-0.010, +0.080]$ & $0.907$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% =========================================================
+\section{Error Analysis and Interpretation}
+% =========================================================
+
+We separate two kinds of evidence about community-level signal. The
+first is \emph{global}, drawn from feature distributions and fitted
+feature importances over aggregate training data. The second is
+\emph{local}, drawn from inspection of the top-ranked test pairs from
+the best locked-fold model. The local analysis is descriptive and
+based on a very small number of true positives; we read it as a
+model-behavior diagnostic, not as confirmation or refutation of any
+sociological hypothesis.
+
+\subsection{Global, feature-level evidence}
+
+Two descriptive facts at the population level are worth stating
+separately. They are aggregated across all 25 rolling-fold training
+blocks; the same direction holds for any individual fold's training
+block.
+
+\begin{enumerate}
+\item Same-community pairs have an empirical positive rate of
+$0.0140\%$ ($215 / 1{,}540{,}969$), whereas cross-community pairs are
+at $0.0095\%$ ($330 / 3{,}472{,}377$). The naive ``cross-community
+distrust'' reading is not supported on this dataset
+(Fig.~\ref{fig:samecross}); same-community pairs are slightly
+\emph{more} likely to receive a new negative rating in the next month.
+\item In the fitted Logistic Regression on S$+$T$+$C,
+\code{neighborhood\_overlap} is the strongest pair-level community
+feature (standardized coefficient $-1.36$), in the direction that
+lower shared-neighborhood predicts higher new-negative probability.
+The same feature is among the top community-family signals in Random
+Forest, where the dominant community-family signals are the boundary
+fractions.
+\end{enumerate}
+
+Taken together, these two facts are consistent with -- but do not by
+themselves prove -- a refined ``intra-community weak tie'' reading:
+distrust does not predominantly appear at coarse community boundaries,
+yet pair-level neighborhood overlap still matters and points in the
+Granovetter direction. Establishing this reading more firmly would
+require conditional analyses (e.g., overlap-conditioned positive rates
+inside and across communities), which we leave to future work.
+
+\subsection{Local diagnostic from the top-50 scored pairs (locked
+fold, RF on S$+$T$+$C)}
+
+At the top-of-ranked-list operating point ($k = 50$), the best model
+returns 5 true positives and 45 false positives. With $n_{TP} = 5$ the
+sample is too small for statistical comparison; what follows is a
+qualitative look at the kinds of pairs the model surfaces.
+
+\begin{table}[t]
+\caption{Mean feature values among the top-50 RF S$+$T$+$C scored
+test pairs on the locked fold (illustrative; $n_{TP} = 5$, $n_{FP} = 45$).}
+\label{tab:top50}
+\centering
+\small
+\begin{tabular}{lrr}
+\toprule
+Feature & TPs & FPs \\
+\midrule
+bootstrap proba              & $0.941$ & $0.914$ \\
+neg\_out\_u                  & $17.80$ & $31.53$ \\
+neg\_in\_v                   & $25.60$ & $14.56$ \\
+decayed\_neg\_received\_v    & $1.34$  & $2.04$  \\
+days\_since\_last\_activity\_u & $3.59$ & $2.53$ \\
+same\_community              & $0.00$  & $0.16$  \\
+neighborhood\_overlap        & $0.080$ & $0.055$ \\
+boundary\_frac\_u            & $0.295$ & $0.394$ \\
+uv\_interaction\_count\_past & $0.00$  & $0.00$  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Three qualitative patterns are visible
+(Table~\ref{tab:top50}). First, the model concentrates risk on a
+small set of recurring ``issuer'' nodes (high \code{neg\_out\_u}) and
+recurring ``victim'' nodes (high \code{neg\_in\_v}); this matches the
+features. Second, what distinguishes the small true-positive subset
+from the false positives at the very top is mostly on the
+\emph{victim} side (mean \code{neg\_in\_v} 25.6 vs 14.6 for FPs), not
+the issuer side. False positives at the top tend to be highly active
+negative-givers whose specific $(u, v)$ target did not receive a new
+negative in the test window. Third, on the community-aware features
+the local direction in this slice does \emph{not} mirror the global
+TRAIN pattern: in the top-50, all 5 TPs are cross-community, and the
+mean \code{neighborhood\_overlap} is higher (not lower) for TPs than
+for FPs.
+
+We deliberately do not interpret the top-50 slice as confirming or
+refuting the global pattern. With 5 true positives, the local
+direction is sensitive to which specific candidate pairs the model
+happened to rank highly, and the local statistic does not have the
+sample support to override the population-level evidence from the
+previous subsection. Supplementary top-200 and top-500 slices
+(available on disk as \code{results/stage7\_error\_top200.csv} and
+\code{results/stage7\_error\_top500.csv}) further illustrate that
+the model is highly \emph{front-loaded}: only 7 of the top 200 and
+8 of the top 500 scored pairs are true positives. Most of the model's
+correct mass is concentrated in a small number of high-confidence
+recurring patterns.
+
+\subsection{Summary}
+
+The descriptive evidence on training data is consistent with a
+refined weak-tie reading in which lower pair-level neighborhood
+overlap is associated with higher distrust risk, while cross-community
+status by itself is not. The local top-50 diagnostic on the locked
+fold shows that the model's highest-confidence predictions are
+concentrated on recurring victims and that its top false positives
+are dominated by highly active negative-givers; the community-feature
+direction in this small slice does not align with the global
+feature-importance direction, which may reflect a conditional-versus-marginal
+divergence, although the sample is too small for a strong conclusion.
+
+% =========================================================
+\section{Limitations}\label{sec:lim}
+% =========================================================
+
+We list the limitations explicitly so that follow-up work can
+prioritize.
+
+\begin{itemize}
+\item \textbf{Per-fold positive counts are still small.} Although
+the rolling-origin protocol accumulates 425 positive test events
+across 25 folds, individual folds have only $\sim 17$ positives on
+average, and per-fold PR-AUC has standard deviation roughly twice its
+mean for Random Forest. This is why the community PR-AUC effect sits
+at the margin of statistical significance even with $n = 25$.
+\item \textbf{Single network, no external replication.} We do not
+report results on Bitcoin-Alpha or any other signed network.
+Bitcoin-Alpha is a natural transfer target and the most important
+next step for reviewer credibility.
+\item \textbf{Much of the temporal lift is recency.} A parameter-free
+recency-only ranker (Section~\ref{sec:results:baselines}) already
+reaches ROC-AUC $0.886$, comparable to structural-only learned models.
+The engineered temporal feature family adds a real but modest
+increment above raw recency ($\sim 0.04$ ROC-AUC); the qualitative
+story should be read as ``recency information dominates'' rather than
+``our specific decay / recent-window feature engineering does.''
+\item \textbf{Limited baseline scope.} Beyond Logistic Regression,
+Random Forest, and LightGBM under a fixed untuned configuration, we
+do not benchmark more aggressive tabular models or graph embeddings.
+LightGBM did not outperform Random Forest at our configuration; a
+tuned variant could.
+\item \textbf{Community effect is not robust across model families.}
+The marginal RF PR-AUC community gain does not replicate under
+LightGBM (mean $-0.007$, $p = 0.51$ on that comparison). Conclusions
+about community-aware features are RF-specific in our experiments.
+\item \textbf{Marginal nature of the Holm-surviving RF community
+PR-AUC test.} The primary-family Wilcoxon $p = 0.048$ sits at the
+loosest Holm threshold. A different primary family, a stricter
+correction (e.g.\ Bonferroni on all 24 tests at
+$\alpha / 24 = 0.002$), or a small data perturbation could flip this
+decision. We report it honestly rather than soft-pedalling it.
+\item \textbf{Precision@$k$ is unstable under the rolling protocol.}
+Per-fold median P@50 is zero for every (model, feature set). We
+report P@$k$ only as supplementary evidence and do not use it to
+support community claims.
+\item \textbf{Last-rating-wins snapshot collapse.} The snapshot
+graph uses the latest rating per pair; this represents current trust
+judgment but discards multi-event nuance. We restore the full event
+history only for temporal and trust-summary features.
+\item \textbf{Bootstrap CIs apply to the locked single fold.}
+Section~\ref{sec:setup:bootstrap}'s percentile CIs quantify sampling
+uncertainty conditional on the locked fold and can under-cover when
+the bootstrap distribution is skewed (e.g.\ for Precision@$k$ near
+its hard ceiling). The rolling-origin Wilcoxon results are our
+primary uncertainty story.
+\item \textbf{\code{prior\_interaction} is partly degenerate.} By
+construction of the candidate set, this flag is $1$ only when $u$
+previously rated $v$ positively. We retain it for transparency but
+note that its fitted coefficient should be read with care.
+\item \textbf{\emph{frac\_boot}$(>0)$ is not a p-value.} We use it
+only to summarize the direction of the bootstrap distribution.
+\end{itemize}
+
+% =========================================================
+\section{Conclusion}
+% =========================================================
+
+We presented an interpretable, leakage-controlled pipeline for early
+warning of new negative trust-edge emergence in the Bitcoin-OTC
+temporal signed network, together with a three-way feature ablation
+under Logistic Regression and Random Forest. We evaluated under a
+rolling-origin protocol over 25 disjoint single-month test folds
+(425 total positive events), with paired Wilcoxon and sign tests on
+per-fold metric deltas and a pre-declared primary family controlled
+by Holm-Bonferroni, and compared the pipeline against parameter-free
+heuristic baselines and LightGBM.
+
+\textbf{Temporal information robustly improves early warning.} The
+$(\mathrm{S}{+}\mathrm{T}) - \mathrm{S}$ ROC-AUC delta is positive
+in 22 of 25 RF folds and 21 of 25 LR folds, with Wilcoxon p-values
+$\leq 1.4\!\times\!10^{-4}$ under both models after Holm correction
+and matched-pairs rank-biserial $r_{\mathrm{rb}} \approx +0.8$. The
+Random Forest temporal PR-AUC lift is also significant after Holm
+correction ($p = 6.3\!\times\!10^{-4}$,
+$r_{\mathrm{rb}} = +0.74$).
+
+\textbf{A large fraction of the temporal lift is recency.} A
+parameter-free recency-only rank-sum reaches ROC-AUC $0.886$ across
+the same folds, indistinguishable from structural-only learned
+models. The engineered temporal feature family still beats it
+clearly under $\mathrm{S}{+}\mathrm{T}$ (RF $0.924$, LR $0.930$), but
+much of the ``temporal'' improvement we report should be understood
+as recency information rather than as specific evidence for any
+particular temporal feature design.
+
+\textbf{Community-aware features provide a small, PR-oriented gain
+under Random Forest, but the effect is model-dependent.} The
+$(\mathrm{S}{+}\mathrm{T}{+}\mathrm{C}) - (\mathrm{S}{+}\mathrm{T})$
+PR-AUC delta is positive in 19 of 25 RF folds (sign-test
+$p = 0.015$; Wilcoxon $p = 0.048$, marginal under the pre-declared
+Holm threshold; $r_{\mathrm{rb}} = +0.45$). Under LightGBM the same
+delta is slightly negative on average. We frame the community PR-AUC
+effect as small, RF-specific, and marginally significant rather than
+as a general claim.
+
+\textbf{Community features do not improve ROC-AUC over the temporal
+baseline.} Neither RF nor LR shows a significant community ROC-AUC
+gain ($p = 0.096$ and $p = 0.47$ respectively), and the RF
+direction is mildly negative on average -- consistent with saturation.
+
+\textbf{Logistic Regression shows no community gain on any metric},
+consistent with the community signal being non-linear.
+
+\textbf{LightGBM at a fixed untuned configuration does not outperform
+Random Forest} on this task. We do not claim it cannot; we report
+what a defensible default configuration produces.
+
+\textbf{Precision@$k$ is unstable under the rolling protocol} --
+most folds return no true positives in the top 50 -- and we
+therefore demote it from headline status to a supplementary metric.
+
+At the descriptive level, the data are not consistent with a coarse
+``distrust between communities'' reading: same-community pairs in
+aggregate training data have a higher empirical positive rate than
+cross-community pairs. They are consistent with a finer pair-level
+pattern in which lower neighborhood overlap is associated with
+higher new-negative probability. We frame this as a refined,
+conservative reading rather than as a confirmed weak-tie result.
+
+The largest natural extensions are: (i) external replication on
+Bitcoin-Alpha, the single highest-value next step; (ii) more
+aggressive baselines, including tuned gradient-boosted trees and
+shallow graph embeddings; (iii) a richer conditional analysis of
+community signal (e.g.\ overlap-conditioned positive rates inside
+and across communities); and (iv) BCa or studentized bootstrap CIs
+for the locked-fold analysis to address skew at the Precision@$k$
+ceiling.
+
+% =========================================================
+% REFERENCES
+% =========================================================
+\begin{thebibliography}{99}
+
+\bibitem{kumar2016}
+S.~Kumar, F.~Spezzano, V.~S. Subrahmanian, and C.~Faloutsos,
+``Edge weight prediction in weighted signed networks,''
+in \emph{Proc.\ IEEE 16th Int.\ Conf.\ Data Mining (ICDM)},
+Barcelona, Spain, Dec.\ 2016, pp.\ 221--230.
+DOI: 10.1109/ICDM.2016.0033.
+
+\bibitem{bertazzi2018}
+I.~Bertazzi, S.~Huet, G.~Deffuant, and F.~Gargiulo,
+``The anatomy of a web of trust: The Bitcoin-OTC market,''
+in \emph{Social Informatics (SocInfo 2018)},
+Lecture Notes in Computer Science, vol.\ 11185, Springer, 2018,
+pp.\ 228--241.
+DOI: 10.1007/978-3-030-01129-1\_14.
+
+\bibitem{choudhury2024}
+N.~Choudhury,
+``Community-aware evolution similarity for link prediction in dynamic
+social networks,''
+\emph{Mathematics (MDPI)}, vol.\ 12, no.\ 2, art.\ 285, 2024.
+DOI: 10.3390/math12020285.
+
+\bibitem{zhang2024}
+Z.~Zhang, P.~Zhao, X.~Li, J.~Liu, X.~Zhang, J.~Huang, and X.~Zhu,
+``Signed graph representation learning: A survey,''
+\emph{arXiv preprint arXiv:2402.15980}, Feb.\ 2024.
+
+\bibitem{granovetter1973}
+M.~S. Granovetter,
+``The strength of weak ties,''
+\emph{Amer.\ J.\ Sociology}, vol.\ 78, no.\ 6, pp.\ 1360--1380, 1973.
+DOI: 10.1086/225469.
+
+\bibitem{blondel2008}
+V.~D. Blondel, J.-L. Guillaume, R.~Lambiotte, and E.~Lefebvre,
+``Fast unfolding of communities in large networks,''
+\emph{J.\ Stat.\ Mech.: Theory Exp.}, vol.\ 2008, no.\ 10, art.\ P10008,
+Oct.\ 2008. DOI: 10.1088/1742-5468/2008/10/P10008.
+
+\bibitem{adamic2003}
+L.~A. Adamic and E.~Adar,
+``Friends and neighbors on the web,''
+\emph{Social Networks}, vol.\ 25, no.\ 3, pp.\ 211--230, 2003.
+DOI: 10.1016/S0378-8733(03)00009-1.
+
+
+\bibitem{snap}
+J.~Leskovec and A.~Krevl,
+``SNAP datasets: Stanford large network dataset collection,''
+\url{http://snap.stanford.edu/data}, Jun.\ 2014.
+Bitcoin-OTC subset:
+\url{https://snap.stanford.edu/data/soc-sign-bitcoinotc.html}.
+
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,78 @@
+Stage 8 - Bootstrap confidence intervals on the locked test set
+
+Test set: 34 positives / 148,639 candidate pairs (t = 48, 49)
+
+Method: paired stratified bootstrap, B = 1000, seed = 42.
+
+CIs are 95% percentile intervals.
+
+
+== Per-(model, feature_set) bootstrap summaries ==
+
+-- logreg, S
+    roc_auc: mean=0.9086 std=0.0168 95% CI=[0.8747, 0.9396]
+     pr_auc: mean=0.0042 std=0.0020 95% CI=[0.0017, 0.0089]
+       p@50: mean=0.0128 std=0.0157 95% CI=[0.0000, 0.0400]
+      p@100: mean=0.0097 std=0.0093 95% CI=[0.0000, 0.0300]
+-- logreg, S+T
+    roc_auc: mean=0.9487 std=0.0096 95% CI=[0.9288, 0.9671]
+     pr_auc: mean=0.0070 std=0.0027 95% CI=[0.0032, 0.0130]
+       p@50: mean=0.0012 std=0.0059 95% CI=[0.0000, 0.0200]
+      p@100: mean=0.0097 std=0.0093 95% CI=[0.0000, 0.0300]
+-- logreg, S+T+C
+    roc_auc: mean=0.9450 std=0.0103 95% CI=[0.9240, 0.9649]
+     pr_auc: mean=0.0068 std=0.0026 95% CI=[0.0031, 0.0125]
+       p@50: mean=0.0001 std=0.0013 95% CI=[0.0000, 0.0000]
+      p@100: mean=0.0097 std=0.0093 95% CI=[0.0000, 0.0300]
+
+-- rf, S
+    roc_auc: mean=0.8803 std=0.0338 95% CI=[0.8028, 0.9404]
+     pr_auc: mean=0.0303 std=0.0257 95% CI=[0.0029, 0.0969]
+       p@50: mean=0.0495 std=0.0306 95% CI=[0.0000, 0.1200]
+      p@100: mean=0.0304 std=0.0169 95% CI=[0.0000, 0.0700]
+-- rf, S+T
+    roc_auc: mean=0.9501 std=0.0128 95% CI=[0.9245, 0.9718]
+     pr_auc: mean=0.0523 std=0.0322 95% CI=[0.0106, 0.1305]
+       p@50: mean=0.0805 std=0.0369 95% CI=[0.0200, 0.1600]
+      p@100: mean=0.0657 std=0.0228 95% CI=[0.0200, 0.1100]
+-- rf, S+T+C
+    roc_auc: mean=0.9397 std=0.0177 95% CI=[0.9027, 0.9704]
+     pr_auc: mean=0.0786 std=0.0447 95% CI=[0.0123, 0.1796]
+       p@50: mean=0.0947 std=0.0387 95% CI=[0.0200, 0.1800]
+      p@100: mean=0.0645 std=0.0220 95% CI=[0.0300, 0.1100]
+
+== Paired-bootstrap deltas (95% percentile CI; frac_boot is the share of bootstrap iterations with delta > 0; this is NOT a frequentist p-value) ==
+
+-- logreg, delta=(S+T) - S
+    roc_auc: mean=+0.0401 95% CI=[+0.0226, +0.0588] frac_boot(>0)=1.000
+     pr_auc: mean=+0.0028 95% CI=[+0.0011, +0.0054] frac_boot(>0)=0.999
+       p@50: mean=-0.0117 95% CI=[-0.0400, +0.0000] frac_boot(>0)=0.000
+      p@100: mean=+0.0000 95% CI=[+0.0000, +0.0000] frac_boot(>0)=0.000
+-- logreg, delta=(S+T+C) - (S+T)
+    roc_auc: mean=-0.0037 95% CI=[-0.0077, +0.0002] frac_boot(>0)=0.035
+     pr_auc: mean=-0.0002 95% CI=[-0.0008, +0.0003] frac_boot(>0)=0.204
+       p@50: mean=-0.0011 95% CI=[-0.0200, +0.0000] frac_boot(>0)=0.000
+      p@100: mean=-0.0000 95% CI=[+0.0000, +0.0000] frac_boot(>0)=0.000
+-- logreg, delta=(S+T+C) - S
+    roc_auc: mean=+0.0364 95% CI=[+0.0195, +0.0554] frac_boot(>0)=1.000
+     pr_auc: mean=+0.0026 95% CI=[+0.0008, +0.0052] frac_boot(>0)=0.996
+       p@50: mean=-0.0128 95% CI=[-0.0400, +0.0000] frac_boot(>0)=0.000
+      p@100: mean=-0.0000 95% CI=[+0.0000, +0.0000] frac_boot(>0)=0.000
+
+-- rf, delta=(S+T) - S
+    roc_auc: mean=+0.0698 95% CI=[+0.0275, +0.1232] frac_boot(>0)=1.000
+     pr_auc: mean=+0.0220 95% CI=[-0.0206, +0.0816] frac_boot(>0)=0.849
+       p@50: mean=+0.0310 95% CI=[-0.0400, +0.1000] frac_boot(>0)=0.755
+      p@100: mean=+0.0353 95% CI=[-0.0002, +0.0800] frac_boot(>0)=0.915
+-- rf, delta=(S+T+C) - (S+T)
+    roc_auc: mean=-0.0104 95% CI=[-0.0275, +0.0023] frac_boot(>0)=0.073
+     pr_auc: mean=+0.0263 95% CI=[-0.0029, +0.0681] frac_boot(>0)=0.935
+       p@50: mean=+0.0143 95% CI=[+0.0000, +0.0600] frac_boot(>0)=0.465
+      p@100: mean=-0.0012 95% CI=[-0.0300, +0.0200] frac_boot(>0)=0.157
+-- rf, delta=(S+T+C) - S
+    roc_auc: mean=+0.0594 95% CI=[+0.0151, +0.1129] frac_boot(>0)=0.998
+     pr_auc: mean=+0.0483 95% CI=[+0.0056, +0.1204] frac_boot(>0)=0.999
+       p@50: mean=+0.0453 95% CI=[-0.0200, +0.1200] frac_boot(>0)=0.850
+      p@100: mean=+0.0341 95% CI=[-0.0100, +0.0800] frac_boot(>0)=0.907
+
+Caveats: percentile CIs can under-cover for skewed bootstrap distributions; P@k is bounded by min(k, n_pos) / k, so P@100 has a hard ceiling of 34/100 = 0.34 by construction. Interpret interval *overlap with zero* as 'not distinguishable from noise on this test set' rather than 'no effect'.
