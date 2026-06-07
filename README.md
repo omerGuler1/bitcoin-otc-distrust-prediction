@@ -16,4 +16,4 @@ python -m scripts.run_stage1_eda
 Produces `data/interim/edges_clean.parquet`, ~63 monthly snapshot pickles under
 `data/interim/snapshots/`, and EDA figures under `results/figures/`.
 
-
+full roadmap: https://github.com/omerGuler1/bitcoin-otc-distrust-prediction/blob/main/report/milestone_report.md
